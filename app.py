@@ -14,11 +14,11 @@ from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.document_converter import DocumentConverter
 
 APP_TOKEN = os.getenv("DOCLING_WORKER_TOKEN", "").strip()
-MAX_BYTES = int(os.getenv("DOCLING_MAX_BYTES", str(20 * 1024 * 1024)))
+MAX_BYTES = int(os.getenv("DOCLING_MAX_BYTES", str(11 * 1024 * 1024)))
 MAX_PAGES = int(os.getenv("DOCLING_MAX_PAGES", "120"))
-TIMEOUT_SECONDS = float(os.getenv("DOCLING_FETCH_TIMEOUT", "25"))
+TIMEOUT_SECONDS = float(os.getenv("DOCLING_FETCH_TIMEOUT", "45"))
 
-app = FastAPI(title="TarlaPusula Docling Worker", version="1.0.1")
+app = FastAPI(title="TarlaPusula Docling Worker", version="1.0.2")
 converter = DocumentConverter(allowed_formats=[InputFormat.PDF])
 
 
@@ -51,6 +51,7 @@ def health():
     return {
         "ok": True,
         "service": "tarlapusula-docling",
+        "version": "1.0.2",
         "max_pages": MAX_PAGES,
         "max_bytes": MAX_BYTES,
     }
@@ -83,10 +84,11 @@ async def convert_document(payload: ConvertRequest, authorization: str | None = 
 
     try:
         stream = DocumentStream(name=f"{digest}.pdf", stream=BytesIO(body))
-        result = converter.convert(stream, max_num_pages=MAX_PAGES)
+        result = converter.convert(stream, max_num_pages=MAX_PAGES, max_file_size=MAX_BYTES)
         document = result.document
         markdown = document.export_to_markdown()
-        structured = document.export_to_dict()
+        pages = getattr(document, "pages", None)
+        page_count = len(pages) if pages is not None else None
     except Exception as exc:
         raise HTTPException(422, f"Docling conversion failed: {type(exc).__name__}")
 
@@ -95,6 +97,7 @@ async def convert_document(payload: ConvertRequest, authorization: str | None = 
         "sha256": digest,
         "source_url": source_url,
         "content_type": "application/pdf",
+        "page_count": page_count,
         "markdown": markdown,
-        "document": structured,
+        "markdown_chars": len(markdown),
     }
