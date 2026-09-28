@@ -18,12 +18,9 @@ MAX_BYTES = int(os.getenv("DOCLING_MAX_BYTES", str(20 * 1024 * 1024)))
 MAX_PAGES = int(os.getenv("DOCLING_MAX_PAGES", "120"))
 TIMEOUT_SECONDS = float(os.getenv("DOCLING_FETCH_TIMEOUT", "25"))
 
-app = FastAPI(title="TarlaPusula Docling Worker", version="1.0.0")
-converter = DocumentConverter(
-    allowed_formats=[InputFormat.PDF],
-    max_num_pages=MAX_PAGES,
-    max_file_size=MAX_BYTES,
-)
+app = FastAPI(title="TarlaPusula Docling Worker", version="1.0.1")
+converter = DocumentConverter(allowed_formats=[InputFormat.PDF])
+
 
 class ConvertRequest(BaseModel):
     url: HttpUrl
@@ -32,8 +29,7 @@ class ConvertRequest(BaseModel):
 def require_token(authorization: str | None) -> None:
     if not APP_TOKEN:
         raise HTTPException(503, "Worker token is not configured")
-    expected = f"Bearer {APP_TOKEN}"
-    if authorization != expected:
+    if authorization != f"Bearer {APP_TOKEN}":
         raise HTTPException(401, "Unauthorized")
 
 
@@ -46,14 +42,18 @@ def ensure_public_url(raw_url: str) -> None:
     except socket.gaierror:
         raise HTTPException(400, "Document host could not be resolved")
     for entry in addresses:
-        ip = ipaddress.ip_address(entry[4][0])
-        if not ip.is_global:
+        if not ipaddress.ip_address(entry[4][0]).is_global:
             raise HTTPException(400, "Private or local document hosts are not allowed")
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "tarlapusula-docling", "max_pages": MAX_PAGES, "max_bytes": MAX_BYTES}
+    return {
+        "ok": True,
+        "service": "tarlapusula-docling",
+        "max_pages": MAX_PAGES,
+        "max_bytes": MAX_BYTES,
+    }
 
 
 @app.post("/convert")
@@ -73,15 +73,17 @@ async def convert_document(payload: ConvertRequest, authorization: str | None = 
 
     content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     body = response.content
+
     if len(body) > MAX_BYTES:
         raise HTTPException(413, "Document is too large")
     if content_type not in {"application/pdf", "application/octet-stream"} and not body.startswith(b"%PDF"):
         raise HTTPException(415, "Only PDF documents are accepted")
 
     digest = hashlib.sha256(body).hexdigest()
+
     try:
         stream = DocumentStream(name=f"{digest}.pdf", stream=BytesIO(body))
-        result = converter.convert(stream)
+        result = converter.convert(stream, max_num_pages=MAX_PAGES)
         document = result.document
         markdown = document.export_to_markdown()
         structured = document.export_to_dict()
